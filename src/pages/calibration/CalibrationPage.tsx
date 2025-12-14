@@ -12,6 +12,7 @@ import {
   Chip,
   LinearProgress,
 } from "@mui/material";
+import { API_ENDPOINTS } from "config/api";
 
 // -------------------- Types --------------------
 type Zone = {
@@ -126,7 +127,7 @@ const CalibrationPage: React.FC = () => {
 
   // ---------------- API: Load zones ----------------
   useEffect(() => {
-    fetch("http://192.168.1.50:5000/api/calibration/zones")
+    fetch(API_ENDPOINTS.calibrationZones)
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
@@ -141,7 +142,7 @@ const CalibrationPage: React.FC = () => {
 
   // ---------------- API: Load saved affine map ----------------
   const refreshServerAffine = () => {
-    fetch("http://192.168.1.50:5000/api/calibration/affine")
+    fetch(API_ENDPOINTS.calibrationAffine)
       .then((r) => r.json())
       .then((data) => {
         // data = { "1": {params,residual,timestamp}, ... }
@@ -246,7 +247,7 @@ const CalibrationPage: React.FC = () => {
 
   const handleSaveZones = async () => {
     try {
-      await fetch("http://192.168.1.50:5000/api/calibration/zones", {
+      await fetch(API_ENDPOINTS.calibrationZones, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(zones),
@@ -313,7 +314,7 @@ const CalibrationPage: React.FC = () => {
   // ✅ Auto Fill C จากตำแหน่งแขนกล (Robot XY -> robX/robY)
   const handleFillCFromRobot = async () => {
     try {
-      const res = await fetch("http://192.168.1.50:5000/api/robot/position");
+      const res = await fetch(API_ENDPOINTS.robotPosition);
       const data = await res.json();
       if (data.status !== "success") {
         alert("Cannot read robot pose");
@@ -344,7 +345,7 @@ const CalibrationPage: React.FC = () => {
       robot: { x: p.robX, y: p.robY },
     }));
 
-    const res = await fetch("http://192.168.1.50:5000/api/calibration/affine_compute", {
+    const res = await fetch(API_ENDPOINTS.calibrationAffineCompute, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pairs }),
@@ -383,7 +384,7 @@ const CalibrationPage: React.FC = () => {
       setAffineResult(result);
 
       // 1) Save matrix ลง server
-      await fetch("http://192.168.1.50:5000/api/calibration/affine", {
+      await fetch(API_ENDPOINTS.calibrationAffine, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -394,7 +395,7 @@ const CalibrationPage: React.FC = () => {
       });
 
       // 2) Sync matrix ลง Robot
-      await fetch(`http://192.168.1.50:5000/api/robot/sync_affine/${selectedZoneId}`, {
+      await fetch(API_ENDPOINTS.robotSyncAffine(selectedZoneId), {
         method: "POST",
       }).catch(() => {});
 
@@ -492,7 +493,7 @@ const CalibrationPage: React.FC = () => {
             }}
           >
             <img
-              src="http://192.168.1.50:5000/video_feed"
+              src={API_ENDPOINTS.videoFeed}
               alt="Camera Feed"
               width={displaySize.w}
               height={displaySize.h}

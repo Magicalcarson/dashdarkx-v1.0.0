@@ -6,6 +6,7 @@ import Box from '@mui/material/Box';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import VideocamOffIcon from '@mui/icons-material/VideocamOff';
 import Chip from '@mui/material/Chip';
+import { API_ENDPOINTS } from 'config/api';
 
 const RevenueByCustomer = () => {
   // เช็คสถานะเซิร์ฟเวอร์
@@ -14,7 +15,7 @@ const RevenueByCustomer = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       // ลองยิงไปเช็คว่า Server Python เปิดอยู่ไหม
-      fetch('http://192.168.1.50:5000/data')
+      fetch(API_ENDPOINTS.data)
         .then(() => setIsOnline(true))
         .catch(() => setIsOnline(false));
     }, 2000); // เช็คทุก 2 วิ
@@ -59,10 +60,10 @@ const RevenueByCustomer = () => {
       >
         {isOnline ? (
           // ดึงภาพจาก Python (Webcam)
-          <img 
-            src="http://192.168.1.50:5000/video_feed" 
-            alt="Webcam Stream" 
-            style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+          <img
+            src={API_ENDPOINTS.videoFeed}
+            alt="Webcam Stream"
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
           />
         ) : (
           // ถ้าต่อไม่ได้

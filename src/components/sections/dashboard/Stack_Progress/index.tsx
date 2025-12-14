@@ -4,6 +4,7 @@ import Typography from '@mui/material/Typography';
 import Box from '@mui/material/Box';
 import Stack from '@mui/material/Stack';
 import StackPolarChart from './StackPolarChart'; // ดึงไฟล์ที่เราเพิ่งสร้างมาใช้
+import { API_ENDPOINTS } from 'config/api';
 
 const CompletedTask = () => {
   
@@ -13,7 +14,7 @@ const CompletedTask = () => {
   // ดึงข้อมูลจาก Python
   useEffect(() => {
     const interval = setInterval(() => {
-      fetch('http://192.168.1.50s:5000/data')
+      fetch(API_ENDPOINTS.data)
         .then((res) => res.json())
         .then((data) => {
           let h = data.stack_h;

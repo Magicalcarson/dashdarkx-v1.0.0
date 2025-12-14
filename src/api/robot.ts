@@ -1,7 +1,8 @@
 // src/api/robot.ts
 import axios from "axios";
+import { API_ENDPOINTS } from "../config/api";
 
-const API = "http://192.168.1.50:5000/api/robot";
+const API = API_ENDPOINTS.robot;
 
 export interface MoveJPayload {
   mode: "MovJ";

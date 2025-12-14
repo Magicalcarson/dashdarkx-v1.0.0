@@ -6,13 +6,14 @@ import Box from '@mui/material/Box';
 import VideocamIcon from '@mui/icons-material/Videocam';
 import VideocamOffIcon from '@mui/icons-material/VideocamOff';
 import Chip from '@mui/material/Chip';
+import { API_ENDPOINTS } from 'config/api';
 
 const CompletedTask = () => {
   const [isOnline, setIsOnline] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      fetch('http://192.168.1.50:5000/data')
+      fetch(API_ENDPOINTS.data)
         .then(() => setIsOnline(true))
         .catch(() => setIsOnline(false));
     }, 2000);
@@ -56,10 +57,10 @@ const CompletedTask = () => {
       >
         {isOnline ? (
           // ตรงนี้เรียก /video_feed_2 (ถ้ายังไม่ได้ทำ Python ให้แก้เป็น /video_feed ชั่วคราว)
-          <img 
-            src="http://192.168.1.50:5000/video_feed_2" 
-            alt="Camera 2 Stream" 
-            style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+          <img
+            src={API_ENDPOINTS.videoFeed2}
+            alt="Camera 2 Stream"
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
           />
         ) : (
           <Stack alignItems="center" spacing={1} color="text.secondary">

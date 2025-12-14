@@ -15,9 +15,10 @@ import {
 } from '@mui/material';
 import MicIcon from '@mui/icons-material/Mic';
 import MicOffIcon from '@mui/icons-material/MicOff';
+import { BASE_URL } from 'config/api';
 
 // ===================== CONFIG =====================
-const PYTHON_SERVER = 'http://192.168.1.50:5000'; // Jetson Orin Nano (Backend)
+const PYTHON_SERVER = BASE_URL; // Backend Server
 
 // ===================== Helper UI Components =====================
 
