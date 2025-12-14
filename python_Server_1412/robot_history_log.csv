@@ -115,3 +115,8 @@ Sequence,Tag_ID,Time,Status1,2,2025-12-11 19:14:58,Success,Zone 3 (Red),98.62,19
 1,1,21:39:19,Success,Zone 2 (Yellow),64.03,404.9
 1,1,22:19:56,Success,Zone 2 (Yellow),55.03,409.82
 1,1,22:50:06,Success,Zone 2 (Yellow),169.5,665.81
+1,1,23:26:58,Success,Zone 2 (Yellow),169.5,665.81
+1,1,23:32:23,Success,Zone 2 (Yellow),169.5,665.81
+1,1,23:35:20,Success,Zone 2 (Yellow),169.5,665.81
+1,1,00:53:29,Success,Zone 2 (Yellow),164.22,240.94
+2,1,00:54:35,Success,Zone 2 (Yellow),129.48,329.61
