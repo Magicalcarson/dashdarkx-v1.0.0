@@ -8,6 +8,7 @@ import RevenueByCustomer from 'components/sections/dashboard/Camera1'; // Camera
 import Products from 'components/sections/dashboard/Camera2'; // Camera 2
 import CompletedTask from 'components/sections/dashboard/Stack_Progress'; // Stack Chart
 import OrdersStatus from 'components/sections/dashboard/orders-status'; // Database Log
+import { API_ENDPOINTS } from 'config/api';
 
 const Dashboard = () => {
   // 1. State สำหรับเก็บข้อมูลทั้งหมดจาก Robot API
@@ -25,7 +26,7 @@ const Dashboard = () => {
   // 2. Fetch Data loop (ดึงข้อมูลทุกๆ 0.2 วินาที)
   useEffect(() => {
     const interval = setInterval(() => {
-      fetch('http://192.168.1.50:5000/data')
+      fetch(API_ENDPOINTS.data)
         .then((res) => res.json())
         .then((data) => {
           setRobotData(data);

@@ -14,6 +14,7 @@ import {
   Switch,
   FormControlLabel,
 } from "@mui/material";
+import { API_ENDPOINTS, BASE_URL } from "config/api";
 
 // -------------------- Types --------------------
 type Zone = {
@@ -64,7 +65,7 @@ const VIDEO_W = 1280;
 const VIDEO_H = 720;
 const baseDisplayWidth = 960;
 
-const CAM2_BASE = "http://192.168.1.50:5000";
+const CAM2_BASE = BASE_URL;
 
 const DEFAULT_ZONES: Zone[] = [
   { id: 1, name: "Zone 1 (Green)", x: 50, y: 50, w: 200, h: 200, z: 0, color: "#00e676" },
@@ -306,7 +307,7 @@ const CalibrationPageCam2: React.FC = () => {
 
   const handleFillCFromRobot = async () => {
     try {
-      const res = await fetch("http://192.168.1.50:5000/api/robot/position");
+      const res = await fetch(API_ENDPOINTS.robotPosition);
       const data = await res.json();
       if (data.status !== "success") {
         alert("Cannot read robot pose");
@@ -370,7 +371,7 @@ const CalibrationPageCam2: React.FC = () => {
           residual: result.residual,
         }),
       });
-      await fetch(`http://192.168.1.50:5000/api/robot/sync_affine_cam2/${selectedZoneId}`, { method: "POST" }).catch(() => {});
+      await fetch(API_ENDPOINTS.robotSyncAffineCam2(selectedZoneId), { method: "POST" }).catch(() => {});
       setZoneResiduals((prev) => ({
         ...prev,
         [selectedZoneId]: [...(prev[selectedZoneId] || []), { residual: result.residual, timestamp: new Date().toISOString() }],

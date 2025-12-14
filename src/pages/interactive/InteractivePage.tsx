@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { Box, Typography, Stack, Chip, FormControlLabel, Switch } from '@mui/material';
 import AdsClickIcon from '@mui/icons-material/AdsClick';
 import PrecisionManufacturingIcon from '@mui/icons-material/PrecisionManufacturing';
+import { API_ENDPOINTS } from 'config/api';
 
 const InteractivePage = () => {
   const [lastClick, setLastClick] = useState<{x:number, y:number} | null>(null);
@@ -13,7 +14,7 @@ const InteractivePage = () => {
   // [NEW] Polling Loop: ดึงข้อมูลจาก Server ทุก 500ms
   useEffect(() => {
     const interval = setInterval(() => {
-      fetch('http://192.168.1.50:5000/data')
+      fetch(API_ENDPOINTS.data)
         .then(res => res.json())
         .then(data => {
           // อัปเดตข้อมูลบนหน้าจอ
@@ -30,7 +31,7 @@ const InteractivePage = () => {
   const handleModeToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newMode = e.target.checked ? 'AUTO' : 'MANUAL';
     // Call API to set mode
-    fetch('http://192.168.1.50:5000/api/robot/mode', {
+    fetch(API_ENDPOINTS.robotMode, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: newMode })
@@ -57,7 +58,7 @@ const InteractivePage = () => {
     
     if (window.confirm(`🖱️ COMMAND: Pick at pixel (${Math.round(px)}, ${Math.round(py)})?`)) {
         setStatus("Sending command...");
-        fetch('http://192.168.1.50:5000/api/robot/click_move', {
+        fetch(API_ENDPOINTS.robotClickMove, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ x: px, y: py })
@@ -127,9 +128,9 @@ const InteractivePage = () => {
       {/* CAMERA FEED */}
       <Box display="flex" justifyContent="center" alignItems="center" sx={{ bgcolor: '#111', borderRadius: 4, p: 2, border: '1px solid #333' }}>
           <div style={{ position: 'relative', cursor: robotMode === 'AUTO' ? 'not-allowed' : 'crosshair' }}>
-              <img 
+              <img
                 ref={imgRef}
-                src="http://192.168.1.50:5000/video_feed" 
+                src={API_ENDPOINTS.videoFeed}
                 alt="Interactive Feed"
                 onClick={handleClick}
                 style={{ 
