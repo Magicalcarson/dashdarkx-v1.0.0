@@ -112,7 +112,7 @@ tag_stability = {}
 # [NEW STATE] Lock ID for Target Stability
 locked_target_id = None
 locked_target_id_cam2 = None
-AUTO_PICK_DELAY = 5.0 # Required delay in seconds before triggering auto pick
+AUTO_PICK_DELAY = 1.5 # Required delay in seconds before triggering auto pick
 
 
 # --- Frame Buffers ---
