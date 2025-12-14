@@ -1,6 +1,3 @@
-# main.server.robot.py
-# Final Stable Base Code: 5-Point Map, Safe Z, Correct Colors, Tag Locking, and Delay Logic
-
 import cv2
 import time
 import threading
@@ -10,10 +7,15 @@ import os
 import json
 import numpy as np
 import math
+import re
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 from pupil_apriltags import Detector
 from dobot_api import DobotApiDashboard, DobotApi, DobotApiMove
+
+# ======================================================================================
+# GLOBAL CONSTANTS & HARDWARE SETUP
+# ======================================================================================
 
 # -------------------------------------------------------------------------
 # [HARDWARE SETUP] GPIO for Jetson Nano / Orin Nano
@@ -26,103 +28,6 @@ try:
 except ImportError:
     print("!!! WARNING: Jetson.GPIO library not found. Running in SIMULATION mode.")
 
-# ======================================================================================
-# 1. 5-POINT CALIBRATION CONFIG (ZONE 2 UPDATED)
-# ======================================================================================
-
-# [FIXED] ใช้ค่า Robot Coordinates เป็นจุดอ้างอิง (ref) เพื่อให้ Map ทำงานถูกต้อง
-# และใช้ค่า Z จริงที่คุณวัดมา (-34 ถึง -40)
-ZONE2_CALIBRATION_POINTS = [
-    # P1: Top-Left
-    {"ref_x": -25.9, "ref_y": 363.1, "true_x": 125.44, "true_y": 174.76, "true_z": -58.90},
-    
-    # P2: Top-Right
-    {"ref_x": 159.0, "ref_y": 364.3, "true_x": 127.32, "true_y": 316.01, "true_z": -63.89},
-    
-    # P3: Bottom-Left
-    {"ref_x": -28.0, "ref_y": 463.8, "true_x": 204.06, "true_y": 174.96, "true_z": -62.24},
-    
-    # P4: Bottom-Right
-    {"ref_x": 156.0, "ref_y": 467.0, "true_x": 207.25, "true_y": 317.78, "true_z": -68.08},
-    
-    # C: Center
-    {"ref_x": 64.0, "ref_y": 419.4, "true_x": 170.17, "true_y": 245.72, "true_z": -63.56}
-]
-
-# --- Picking Settings ---
-FIXED_OBJECT_HEIGHT = 20.0 
-Z_PICK_OFFSET = 60.0  # (ใช้สำหรับ Zone 1 และ 3)
-
-# ======================================================================================
-# GLOBAL SETTINGS
-# ======================================================================================
-RTSP_URL_CAM1 = "rtsp://admin:OokamiMio-2549@192.168.1.124/stream1"
-RTSP_URL_CAM2 = "rtsp://admin:OokamiMio-2549@192.168.1.109/stream1"
-SUCTION_SENSOR_PIN = 33
-DB_FILE = "robot_history_log.csv"
-ZONE_FILE_CAM1 = "zones_config_cam1.json"
-ZONE_FILE_CAM2 = "zones_config_cam2.json"
-AFFINE_FILE_CAM1 = "affine_params_cam1.json"
-AFFINE_FILE_CAM2 = "affine_params_cam2.json"
-ZONE_OVERRIDES_FILE = "zone_overrides.json"
-AUTO_CAL_FILE = "auto_z_calibration.json"
-
-# --- Object Data ---
-OBJECT_INFO = {
-    0: {'name': 'Fixed Box',   'height': FIXED_OBJECT_HEIGHT},
-    1: {'name': 'Fixed Box',   'height': FIXED_OBJECT_HEIGHT},
-    2: {'name': 'Fixed Box',   'height': FIXED_OBJECT_HEIGHT},
-    3: {'name': 'Fixed Box',   'height': FIXED_OBJECT_HEIGHT},
-    4: {'name': 'Fixed Box',   'height': FIXED_OBJECT_HEIGHT},
-}
-
-# --- State Control ---
-CAM2_ENABLED = True  
-ROBOT_MODE = 'MANUAL' # 'MANUAL' or 'AUTO'
-is_robot_busy = False 
-
-
-# --- Robot Clients ---
-client_dash = None
-client_move = None
-client_feed = None
-is_connected = False
-
-# --- Global Data for Web ---
-web_data = {
-    "x": 0.0, "y": 0.0, "stack_h": 0.0, "total_picked": 0, "cycle_time": 0.0,
-    "status": "IDLE", "history": [], "active_id": "-",
-    "object_counts": {0: 0, 1: 0, 2: 0, 3: 0, 4: 0},
-    "tags": [], "cam2_enabled": True, "robot_mode": "MANUAL",
-    "target_x": 0.0, "target_y": 0.0,
-}
-
-# --- Logic Variables ---
-history_log = []
-sequence_count = 0
-current_stack = 0.0
-total_picked = 0
-last_process_time = time.time()
-
-# --- Vision State (แยกเก็บข้อมูลจาก 2 กล้อง) ---
-current_visible_tags_cam1 = [] 
-current_visible_tags_cam2 = []
-processed_tags = {}   
-tag_stability = {}    
-# [NEW STATE] Lock ID for Target Stability
-locked_target_id = None
-locked_target_id_cam2 = None
-AUTO_PICK_DELAY = 5.0 # Required delay in seconds before triggering auto pick
-
-
-# --- Frame Buffers ---
-output_frame_cam1 = None; lock_cam1 = threading.Lock()
-output_frame_cam2 = None; lock_cam2 = threading.Lock()
-
-# ======================================================================================
-# 2. SYSTEM SETUP FUNCTIONS
-# ======================================================================================
-
 def setup_gpio():
     if HAS_GPIO:
         try:
@@ -132,7 +37,84 @@ def setup_gpio():
         except Exception as e:
             print(f"[ERROR] GPIO Setup failed: {e}")
 
-setup_gpio()
+# -------------------------------------------------------------------------
+# 1. CALIBRATION CONFIG (Simplified Defaults)
+# -------------------------------------------------------------------------
+FIXED_OBJECT_HEIGHT = 20.0 
+Z_PICK_OFFSET = 60.0  # Tool length offset (SUCTION_CUP_LENGTH)
+
+# --- Default 5-Point Z Data (Retained for Zone 2 IDW logic) ---
+ZONE2_CALIBRATION_POINTS = [
+    # P1: Top-Left (CAM PIXEL REF) -> (ROBOT REF)
+    {"ref_x": -25.9, "ref_y": 363.1, "true_x": 125.44, "true_y": 174.76, "true_z": -58.90},
+    # P2: Top-Right
+    {"ref_x": 159.0, "ref_y": 364.3, "true_x": 127.32, "true_y": 316.01, "true_z": -63.89},
+    # P3: Bottom-Left
+    {"ref_x": -28.0, "ref_y": 463.8, "true_x": 204.06, "true_y": 174.96, "true_z": -62.24},
+    # P4: Bottom-Right
+    {"ref_x": 156.0, "ref_y": 467.0, "true_x": 207.25, "true_y": 317.78, "true_z": -68.08},
+    # C: Center
+    {"ref_x": 64.0, "ref_y": 419.4, "true_x": 170.17, "true_y": 245.72, "true_z": -63.56}
+]
+
+# --- File Paths ---
+RTSP_URL_CAM1 = "rtsp://admin:OokamiMio-2549@192.168.1.124/stream1"
+RTSP_URL_CAM2 = "rtsp://admin:OokamiMio-2549@192.168.1.109/stream1"
+SUCTION_SENSOR_PIN = 33
+DB_FILE = "robot_history_log.csv"
+ZONE_FILE_CAM1 = "zones_config_cam1.json"
+ZONE_FILE_CAM2 = "zones_config_cam2.json"
+AFFINE_FILE_CAM1 = "affine_params_cam1.json"
+AFFINE_FILE_CAM2 = "affine_params_cam2.json"
+ZONE_OVERRIDES_FILE = "zone_overrides.json"
+
+# --- State Variables (Global Initialization) ---
+CAM2_ENABLED = True  
+ROBOT_MODE = 'MANUAL' 
+is_robot_busy = False 
+
+client_dash = None
+client_move = None
+client_feed = None
+is_connected = False
+
+web_data = {
+    "x": 0.0, "y": 0.0, "stack_h": 0.0, "total_picked": 0, "cycle_time": 0.0,
+    "status": "IDLE", "history": [], "active_id": "-",
+    "object_counts": {0: 0, 1: 0, 2: 0, 3: 0, 4: 0},
+    "tags": [], "cam2_enabled": True, "robot_mode": "MANUAL",
+    "target_x": 0.0, "target_y": 0.0,
+}
+
+history_log = []
+sequence_count = 0
+current_stack = 0.0
+total_picked = 0
+last_process_time = time.time()
+current_visible_tags_cam1 = []
+current_visible_tags_cam2 = []
+processed_tags = {}
+tag_stability = {}
+
+locked_target_id = None
+locked_target_id_cam2 = None
+AUTO_PICK_DELAY = 5.0
+
+output_frame_cam1 = None; lock_cam1 = threading.Lock()
+output_frame_cam2 = None; lock_cam2 = threading.Lock()
+
+zone_matrices_cam1 = {}
+zone_matrices_cam2 = {}
+
+# ✨ FIXED: Global initialization for zones and overrides to prevent NameError
+zones_config_cam1 = [] 
+zones_config_cam2 = []
+zone_overrides = {}
+
+
+# ======================================================================================
+# II. UTILITY & CALIBRATION FUNCTIONS
+# ======================================================================================
 
 def check_suction_status():
     if not HAS_GPIO: return True 
@@ -162,31 +144,22 @@ def save_to_database(seq, tag_id, timestamp, zone_name, rx, ry):
     try:
         with open(DB_FILE, 'a', newline='', encoding='utf-8') as f:
             csv.writer(f).writerow([seq, tag_id, timestamp, "Success", zone_name, rx, ry])
-        # [FIXED] Ensure history_log is correctly updated for dashboard
         history_log.insert(0, {"seq": seq, "id": tag_id, "time": timestamp, "status": "Success", "zone": zone_name})
         if len(history_log) > 50: history_log.pop()
         web_data['history'] = history_log
     except Exception as e:
         print(f"[DB Error] {e}")
 
-# ======================================================================================
-# 3. COORDINATE SYSTEM & CALIBRATION
-# ======================================================================================
+def hex_to_bgr(hex_color):
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (4, 2, 0))
 
-default_zones = [
-    {"id": 1, "name": "Zone 1", "x": 50, "y": 50, "w": 250, "h": 200, "z": 150.0, "color": "#00ff00"},  
-    {"id": 2, "name": "Zone 2", "x": 580, "y": 150, "w": 200, "h": 200, "z": -37.0, "color": "#ffff00"}, 
-    {"id": 3, "name": "Zone 3", "x": 450, "y": 50, "w": 150, "h": 150, "z": 50.0, "color": "#ff0000"}
-]
+def get_distance(x1, y1, x2, y2):
+    return math.sqrt((x1-x2)**2 + (y1-y2)**2)
 
-zones_config_cam1 = load_json(ZONE_FILE_CAM1, default_zones)
-zones_config_cam2 = load_json(ZONE_FILE_CAM2, default_zones)
-zone_overrides = load_json(ZONE_OVERRIDES_FILE, {})
-
-zone_matrices_cam1 = {}
-zone_matrices_cam2 = {}
-
+# --- Affine Matrix Loading ---
 def load_affine_matrices(file_path, target_dict):
+    """Loads affine matrix parameters from JSON file into numpy matrix structure."""
     data = load_json(file_path, {})
     if isinstance(data, dict):
         for zid_str, rec in data.items():
@@ -196,53 +169,15 @@ def load_affine_matrices(file_path, target_dict):
                     mtx = np.array([[float(p["a"]), float(p["b"]), float(p["c"])],
                                     [float(p["d"]), float(p["e"]), float(p["f"])]], dtype=np.float32)
                     target_dict[int(zid_str)] = mtx
-            except Exception: pass
+            except Exception: 
+                pass
 
-load_affine_matrices(AFFINE_FILE_CAM1, zone_matrices_cam1)
-load_affine_matrices(AFFINE_FILE_CAM2, zone_matrices_cam2)
-
-# ======================================================================
-# [HARDCODED] CALIBRATION DATA
-# ======================================================================
-print(">>> [INIT] Computing Calibration Matrices...")
-
-# Zone 1 (Original)
-ZONE1_SRC = np.float32([[429.0, 452.0],[620.0, 459.0],[425.0, 557.0],[617.0, 569.0],[522.0, 506.0]])
-ZONE1_DST = np.float32([[269.24, 71.70],[272.26, 212.65],[350.53, 71.82],[354.85, 214.52],[309.74, 143.01]])
-
-# Zone 2 (Shifted +570 to match true frame coordinates)
-ZONE2_SRC = np.float32([
-    [112.0+570, 172.5],   # P1 Cam (Adjusted)
-    [112.0+570, 319.6],   # P2 Cam (Adjusted)
-    [195.5+570, 172.5],   # P3 Cam (Adjusted)
-    [195.5+570, 319.6],   # P4 Cam (Adjusted)
-    [155.5+570, 246.8]    # C Cam (Adjusted)
-])
-ZONE2_DST = np.float32([
-    [122.18, 175.45], # P1 Robot
-    [121.66, 318.27], # P2 Robot
-    [205.21, 175.15], # P3 Robot
-    [208.83, 318.74], # P4 Robot
-    [166.41, 246.13]  # C Robot
-])
-
-ZONE1_MATRIX, _ = cv2.estimateAffine2D(ZONE1_SRC, ZONE1_DST)
-ZONE2_MATRIX, _ = cv2.estimateAffine2D(ZONE2_SRC, ZONE2_DST)
-
-zone_matrices_cam1[1] = ZONE1_MATRIX
-zone_matrices_cam1[2] = ZONE2_MATRIX
-print(">>> [INIT] Calibration Applied Success!")
-
-# --- 5-POINT CALIBRATION LOGIC (IDW) ---
+# --- Z Calculation Logic (For Zone 2 IDW) ---
 def calculate_correction_from_5_points(current_x, current_y):
-    """
-    คำนวณค่า X, Y, Z ที่ถูกต้อง โดยการเฉลี่ยน้ำหนักจาก 5 จุด (IDW)
-    ref_x, ref_y คือค่า Robot Coordinate ของจุด Calibration
-    """
+    """(Used only for Zone 2 in this old version) IDW Z-interpolation logic."""
     points = ZONE2_CALIBRATION_POINTS
-    numerator_z = 0.0; numerator_x = 0.0; numerator_y = 0.0
-    denominator = 0.0
-    power = 3.0 # Power สูง เพื่อดึงค่าเข้าหาจุดที่ใกล้ที่สุด
+    numerator_z = 0.0; denominator = 0.0
+    power = 3.0
 
     for p in points:
         dist = math.sqrt((current_x - p['ref_x'])**2 + (current_y - p['ref_y'])**2)
@@ -251,27 +186,20 @@ def calculate_correction_from_5_points(current_x, current_y):
         
         weight = 1.0 / (dist ** power)
         
-        # คำนวณ Offset (จริงๆแล้ว ref=true ดังนั้น offset=0 แต่นี่เผื่อไว้ปรับแก้ละเอียด)
         offset_x = p['true_x'] - p['ref_x']
         offset_y = p['true_y'] - p['ref_y']
         
-        numerator_x += (offset_x * weight)
-        numerator_y += (offset_y * weight)
         numerator_z += (p['true_z'] * weight)
         denominator += weight
 
     if denominator == 0: return current_x, current_y, -37.0 
 
-    avg_offset_x = numerator_x / denominator
-    avg_offset_y = numerator_y / denominator
     final_z = numerator_z / denominator
     
-    # พิกัดใหม่
-    final_x = current_x + avg_offset_x
-    final_y = current_y + avg_offset_y
-    
-    return final_x, final_y, final_z
+    return current_x, current_y, final_z
 
+
+# --- Coordinate Transformation ---
 def pixel_to_robot_cam1(px, py, zone_id):
     if zone_id in zone_matrices_cam1:
         pt = np.array([px, py, 1.0], dtype=np.float32)
@@ -287,30 +215,26 @@ def pixel_to_robot_cam2(px, py, zone_id):
     return float(px), float(py)
 
 def get_zone_tag_offset(zone_id, tag_id):
+    # Uses global zone_overrides defined above
     try: return float(zone_overrides.get(str(zone_id), {}).get(str(tag_id), 0.0))
     except: return 0.0
 
 def check_zone_cam1(cx, cy):
+    # Uses global zones_config_cam1 loaded at runtime
     for zone in zones_config_cam1:
         if zone['x'] < cx < zone['x'] + zone['w'] and zone['y'] < cy < zone['y'] + zone['h']:
             return zone
     return None
 
 def check_zone_cam2(cx, cy):
+    # Uses global zones_config_cam2 loaded at runtime
     for zone in zones_config_cam2:
         if zone['x'] < cx < zone['x'] + zone['w'] and zone['y'] < cy < zone['y'] + zone['h']:
             return zone
     return None
 
-def hex_to_bgr(hex_color):
-    hex_color = hex_color.lstrip('#')
-    return tuple(int(hex_color[i:i+2], 16) for i in (4, 2, 0))
-
-def get_distance(x1, y1, x2, y2):
-    return math.sqrt((x1-x2)**2 + (y1-y2)**2)
-
 # ======================================================================================
-# 4. ROBOT & LOGIC HELPERS
+# III. ROBOT CONTROL & PICK SEQUENCE
 # ======================================================================================
 
 def set_light(color):
@@ -331,7 +255,6 @@ def control_suction(action):
             client_dash.DO(9, 1); time.sleep(0.5); client_dash.DO(9, 0)
     except: pass
 
-# [UPDATED] Pick Sequence with MovJ for Hover (Safe Motion)
 def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
     global is_robot_busy, web_data, sequence_count, total_picked
     
@@ -345,14 +268,17 @@ def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
         set_light('yellow')
         print(f"[ROBOT] Picking ID:{tag_id} Zone:{zone_name} at XYZ: ({rx:.2f}, {ry:.2f}, {z_pick:.2f})")
 
-        # 1. Standby (MovJ)
+        # FIX R-AXIS ROTATION: Use R=0.0 for picking motions (Vertical alignment)
+        R_PICK_ANGLE = 0.0
+        
+        # 1. Standby (MovJ) - Use the R value defined in the standby configuration
         client_move.MovJ(float(sb['x']), float(sb['y']), float(sb['z']), float(sb['r'])); client_move.Sync()
         
-        # 2. Hover (MovJ) - [FIX] ใช้ MovJ เพื่อแก้ปัญหาแขนกลเอื้อมไม่ถึง
-        client_move.MovJ(rx, ry, z_hover, float(sb['r'])); client_move.Sync()
+        # 2. Hover (MovJ) - Use the fixed R for vertical picking
+        client_move.MovJ(rx, ry, z_hover, R_PICK_ANGLE); client_move.Sync()
         
-        # 3. Pick (MovL) - ลงแนวดิ่ง
-        client_move.MovL(rx, ry, z_pick, float(sb['r'])); client_move.Sync()
+        # 3. Pick (MovL) - ลงแนวดิ่ง - Use the fixed R for vertical picking
+        client_move.MovL(rx, ry, z_pick, R_PICK_ANGLE); client_move.Sync()
 
         # 4. Suction
         control_suction('on')
@@ -364,12 +290,11 @@ def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
             web_data['status'] = "SUCTION SUCCESS"
             sequence_count += 1; total_picked += 1
             ts = datetime.datetime.now().strftime("%H:%M:%S")
-            # [FIXED] Save to database in the success path
             save_to_database(sequence_count, tag_id, ts, zone_name, round(rx, 2), round(ry, 2))
             
-            # ยกขึ้น (MovL)
-            client_move.MovL(rx, ry, z_hover, float(sb['r'])); client_move.Sync()
-            # กลับ Standby (MovJ)
+            # ยกขึ้น (MovL) - Use the fixed R for vertical picking
+            client_move.MovL(rx, ry, z_hover, R_PICK_ANGLE); client_move.Sync()
+            # กลับ Standby (MovJ) - Use the R value defined in the standby configuration
             client_move.MovJ(float(sb['x']), float(sb['y']), float(sb['z']), float(sb['r'])); client_move.Sync()
             # Home
             client_move.JointMovJ(0.0, 0.0, 0.0, 200.0); client_move.Sync()
@@ -380,7 +305,7 @@ def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
             print(">>> SUCTION FAILED")
             web_data['status'] = "FAILED"
             control_suction('off')
-            client_move.MovL(rx, ry, z_hover, float(sb['r'])); client_move.Sync()
+            client_move.MovL(rx, ry, z_hover, R_PICK_ANGLE); client_move.Sync()
             set_light('red')
             is_robot_busy = False
             return False
@@ -390,27 +315,99 @@ def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
         is_robot_busy = False
         set_light('red')
         return False
+        
+# --------------------------------------------------------------------------------------
+# STANDALONE SUCTION TEST FUNCTION (FOR TESTING DI)
+# --------------------------------------------------------------------------------------
+
+def test_suction_and_stop():
+    """
+    Test routine: Turns suction on, waits for the sensor input (suction detected), 
+    and turns suction off immediately upon detection or after a timeout.
+    """
+    global is_robot_busy
+    
+    if not is_connected:
+        print("[TEST] Robot is not connected.")
+        return {"status": "error", "message": "Robot is not connected."}
+
+    try:
+        is_robot_busy = True
+        set_light('yellow')
+        print("\n=============================================")
+        print("[TEST START] Initiating suction test...")
+        
+        control_suction('on')
+        time.sleep(0.3) 
+        
+        max_wait_time = 3.0
+        start_time = time.time()
+        contact_detected = False
+        
+        print(f"[STEP 2] Monitoring Suction Sensor (DI Pin {SUCTION_SENSOR_PIN}) for contact (Max {max_wait_time}s)...")
+        
+        while time.time() - start_time < max_wait_time:
+            if check_suction_status():
+                contact_detected = True
+                print(f"!!! SUCCESS !!! Contact/Suction DETECTED after {time.time() - start_time:.2f}s. Stopping suction.")
+                break
+            
+            time.sleep(0.05) 
+
+        control_suction('off')
+        
+        if contact_detected:
+            set_light('green')
+            return {"status": "success", "message": "Suction detected and stopped."}
+        else:
+            set_light('red')
+            print(f"!!! FAILURE !!! Test TIMEOUT after {max_wait_time:.2f}s. No contact detected.")
+            return {"status": "failure", "message": "Suction timeout or sensor failed."}
+
+    except Exception as e:
+        print(f"[CRITICAL ERROR] Test failed unexpectedly: {e}")
+        control_suction('off') # Ensure suction is off on error
+        set_light('red')
+        return {"status": "error", "message": str(e)}
+    finally:
+        is_robot_busy = False
+        print("=============================================")
+
 
 # ======================================================================================
-# 5. FLASK API SERVER
+# V. FLASK API SERVER
 # ======================================================================================
 app = Flask(__name__)
 CORS(app)
 
+# --- NEW API: Suction Test Endpoint ---
+@app.route('/api/test/suction', methods=['POST'])
+def api_test_suction():
+    global is_robot_busy
+    if is_robot_busy:
+        return jsonify({"status": "busy", "message": "Robot is busy with another task."}), 423
+    
+    # Run the test function in a separate thread to avoid blocking the main server thread
+    def thread_target():
+        result = test_suction_and_stop()
+        print(f"[TEST RESULT] {result['message']}")
+    
+    threading.Thread(target=thread_target).start()
+    
+    return jsonify({"status": "started", "message": "Suction test sequence initiated in background."})
+
+
 @app.route('/api/robot/mode', methods=['POST'])
 def set_robot_mode():
-    global ROBOT_MODE, web_data
+    global ROBOT_MODE, web_data, tag_stability, locked_target_id, locked_target_id_cam2
     body = request.json or {}
     new_mode = body.get('mode')
     if new_mode in ['MANUAL', 'AUTO']:
         ROBOT_MODE = new_mode
         web_data['robot_mode'] = new_mode
-        # Reset Target stability and locking when mode changes
-        global tag_stability, locked_target_id, locked_target_id_cam2
         tag_stability = {}
         locked_target_id = None
         locked_target_id_cam2 = None
-        
         return jsonify({"status": "success", "mode": new_mode})
     return jsonify({"status": "error"}), 400
 
@@ -422,8 +419,6 @@ def click_move():
 
     cx, cy = request.json.get('x'), request.json.get('y')
     target_tag = None; min_dist = 50.0
-
-    # [FIXED] Search in combined buffers
     all_tags = current_visible_tags_cam1 + current_visible_tags_cam2
     
     for tag in all_tags:
@@ -435,23 +430,27 @@ def click_move():
     if not zone_data: return jsonify({"status": "error", "message": "Outside Zone"})
 
     tag_id = int(target_tag['id'])
-    
-    # Use pre-calculated values stored in the tag object by the vision loop
     final_rx = target_tag['rx']
     final_ry = target_tag['ry']
     z_pick = target_tag['z_pick']
-    
     z_hover = z_pick + 40.0
-    sb = zone_data.get('standby', {"x": 250, "y": 0, "z": 100, "r": 0})
+    
+    # Load standby point from the zone config, ensure R is float
+    sb = zone_data.get('standby', {"x": 250, "y": 0, "z": 100, "r": 0.0})
+    
+    if 'r' not in sb:
+        sb['r'] = 0.0
+    else:
+        try:
+            sb['r'] = float(sb['r'])
+        except ValueError:
+            sb['r'] = 0.0
+
 
     print(f"[CLICK] Pixel:({cx:.1f},{cy:.1f}) -> Final:({final_rx:.1f},{final_ry:.1f}, Z:{z_pick:.1f})")
-    
-    # [FIXED] In MANUAL mode, execute immediately (no delay)
     threading.Thread(target=execute_pick_sequence, args=(final_rx, final_ry, z_pick, z_hover, sb, tag_id, zone_data['name'])).start()
-    
     return jsonify({"status": "success", "message": "Command Sent"})
 
-# --- Robot APIs (Omitted for brevity) ---
 @app.route('/api/robot/connect', methods=['POST'])
 def connect_robot():
     global client_dash, client_move, client_feed, is_connected
@@ -468,58 +467,67 @@ def connect_robot():
         return jsonify({"status": "success"})
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
-@app.route('/api/robot/enable', methods=['POST'])
-def enable_robot():
-    if not is_connected: return jsonify({"status": "error"})
-    if request.json.get('enable'): client_dash.EnableRobot(); set_light('green')
-    else: client_dash.DisableRobot(); set_light('yellow')
-    return jsonify({"status": "success"})
-
-@app.route('/api/robot/reset', methods=['POST'])
-def reset_robot():
-    if is_connected: client_dash.ResetRobot(); set_light('green')
-    return jsonify({"status": "success"})
-
-@app.route('/api/robot/clear', methods=['POST'])
-def clear_error():
-    if is_connected: client_dash.ClearError(); set_light('green')
-    return jsonify({"status": "success"})
-
-@app.route('/api/robot/emergency_stop', methods=['POST'])
-def emergency_stop():
-    if is_connected: client_dash.EmergencyStop(); set_light('red')
-    return jsonify({"status": "success"})
-
-@app.route('/api/robot/speed', methods=['POST'])
-def set_speed():
-    if is_connected: client_dash.SpeedFactor(int(request.json.get('val', 30)))
-    return jsonify({"status": "success"})
-
-@app.route('/api/robot/do', methods=['POST'])
-def set_do():
-    if is_connected: client_dash.DO(int(request.json.get('index', 1)), 1 if request.json.get('status') == 'On' else 0)
-    return jsonify({"status": "success"})
+@app.route('/api/robot/position', methods=['GET'])
+def get_robot_position():
+    if not is_connected or client_feed is None: return jsonify({"status": "error"}), 400
+    try:
+        p = client_feed.GetPose() 
+        numbers = re.findall(r'-?\d+\.?\d*', p)
+        
+        if len(numbers) >= 4:
+            return jsonify({
+                "status": "success",
+                "x": float(numbers[1]),
+                "y": float(numbers[2]),
+                "z": float(numbers[3]),
+                "r": float(numbers[4]) if len(numbers) > 4 else 0.0
+            })
+        else:
+            return jsonify({"status": "error", "message": f"Invalid pose response format: {p}"}), 500
+    except Exception as e:
+        print(f"[ERROR] GetPose: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/robot/move', methods=['POST'])
 def move_robot():
     if not is_connected: return jsonify({"status": "error"})
     d = request.json or {}; m = d.get('mode')
     try:
-        if m == 'MovJ': client_move.MovJ(float(d['x']), float(d['y']), float(d['z']), float(d['r']))
-        elif m == 'MovL': client_move.MovL(float(d['x']), float(d['y']), float(d['z']), float(d['r']))
+        r_val = float(d.get('r', 0.0))
+        
+        if m == 'MovJ': client_move.MovJ(float(d['x']), float(d['y']), float(d['z']), r_val)
+        elif m == 'MovL': client_move.MovL(float(d['x']), float(d['y']), float(d['z']), r_val)
         elif m == 'JointMovJ': client_move.JointMovJ(float(d['j1']), float(d['j2']), float(d['j3']), float(d['j4']))
         elif m == 'home': client_move.JointMovJ(0.0, 0.0, 0.0, 200.0)
         return jsonify({"status": "success"})
     except Exception as e: return jsonify({"status": "error", "message": str(e)})
 
-@app.route('/api/robot/position', methods=['GET'])
-def get_robot_position():
-    if not is_connected or client_feed is None: return jsonify({"status": "error"}), 400
-    try:
-        p = client_feed.GetPose()
-        return jsonify({"status": "success", "x": float(p[0]), "y": float(p[1]), "z": float(p[2]), "r": float(p[3])})
-    except: return jsonify({"status": "error"}), 500
-
+@app.route('/api/robot/enable', methods=['POST'])
+def enable_robot():
+    if not is_connected: return jsonify({"status": "error"})
+    if request.json.get('enable'): client_dash.EnableRobot(); set_light('green')
+    else: client_dash.DisableRobot(); set_light('yellow')
+    return jsonify({"status": "success"})
+@app.route('/api/robot/reset', methods=['POST'])
+def reset_robot():
+    if is_connected: client_dash.ResetRobot(); set_light('green')
+    return jsonify({"status": "success"})
+@app.route('/api/robot/clear', methods=['POST'])
+def clear_error():
+    if is_connected: client_dash.ClearError(); set_light('green')
+    return jsonify({"status": "success"})
+@app.route('/api/robot/emergency_stop', methods=['POST'])
+def emergency_stop():
+    if is_connected: client_dash.EmergencyStop(); set_light('red')
+    return jsonify({"status": "success"})
+@app.route('/api/robot/speed', methods=['POST'])
+def set_speed():
+    if is_connected: client_dash.SpeedFactor(int(request.json.get('val', 30)))
+    return jsonify({"status": "success"})
+@app.route('/api/robot/do', methods=['POST'])
+def set_do():
+    if is_connected: client_dash.DO(int(request.json.get('index', 1)), 1 if request.json.get('status') == 'On' else 0)
+    return jsonify({"status": "success"})
 @app.route('/api/robot/io', methods=['GET'])
 def get_robot_io():
     if not is_connected or client_feed is None: return jsonify({"status": "error"}), 400
@@ -528,7 +536,6 @@ def get_robot_io():
         do = [int(client_feed.DO(i)) for i in range(1, 9)]
         return jsonify({"status": "success", "di": di, "do": do})
     except: return jsonify({"status": "error"}), 500
-
 @app.route('/api/cam2/toggle', methods=['POST'])
 def toggle_cam2():
     global CAM2_ENABLED, web_data
@@ -537,22 +544,18 @@ def toggle_cam2():
         CAM2_ENABLED = bool(body['active'])
         web_data['cam2_enabled'] = CAM2_ENABLED
     return jsonify({"status": "success", "active": CAM2_ENABLED})
-
 @app.route('/api/cam2/state', methods=['GET'])
 def get_cam2_state(): return jsonify({"active": CAM2_ENABLED})
-
 @app.route('/api/calibration/zones', methods=['GET', 'POST'])
 def handle_zones_cam1():
     global zones_config_cam1
     if request.method == 'POST': zones_config_cam1 = request.json; save_json(ZONE_FILE_CAM1, zones_config_cam1)
     return jsonify(zones_config_cam1)
-
 @app.route('/api/cam2/calibration/zones', methods=['GET', 'POST'])
 def handle_zones_cam2():
     global zones_config_cam2
     if request.method == 'POST': zones_config_cam2 = request.json; save_json(ZONE_FILE_CAM2, zones_config_cam2)
     return jsonify(zones_config_cam2)
-
 @app.route('/api/calibration/affine', methods=['GET', 'POST'])
 def handle_affine_cam1():
     if request.method == 'GET': return jsonify(load_json(AFFINE_FILE_CAM1, {}))
@@ -560,10 +563,9 @@ def handle_affine_cam1():
     if zid:
         data = load_json(AFFINE_FILE_CAM1, {})
         data[zid] = body
-        save_json(AFFINE_FILE_CAM1, data); load_affine_matrices(AFFINE_FILE_CAM1, zone_matrices_cam1)
+        save_json(AFFINE_FILE_CAM1, data)
         return jsonify({"status": "saved"})
     return jsonify({"status": "error"}), 400
-
 @app.route('/api/cam2/calibration/affine', methods=['GET', 'POST'])
 def handle_affine_cam2():
     if request.method == 'GET': return jsonify(load_json(AFFINE_FILE_CAM2, {}))
@@ -571,10 +573,9 @@ def handle_affine_cam2():
     if zid:
         data = load_json(AFFINE_FILE_CAM2, {})
         data[zid] = body
-        save_json(AFFINE_FILE_CAM2, data); load_affine_matrices(AFFINE_FILE_CAM2, zone_matrices_cam2)
+        save_json(AFFINE_FILE_CAM2, data)
         return jsonify({"status": "saved"})
     return jsonify({"status": "error"}), 400
-
 @app.route('/api/calibration/affine_compute', methods=['POST'])
 @app.route('/api/cam2/calibration/affine_compute', methods=['POST'])
 def compute_affine():
@@ -595,7 +596,6 @@ def compute_affine():
         res = float(np.sqrt(np.mean((np.array(B) - np.array(A).dot(x)) ** 2)))
         return jsonify({"params": params, "residual": res})
     except Exception as e: return jsonify({"error": str(e)}), 500
-
 @app.route('/api/calibration/zone_override', methods=['POST'])
 def override_z():
     body = request.json or {}; zid = str(body.get('zone_id')); tid = str(body.get('tag_id')); off = float(body.get('offset_mm', 0.0))
@@ -796,9 +796,9 @@ def vision_loop_cam1():
             
             # Cleanup stability dictionary
             for tid in list(tag_stability.keys()):
-                if tid not in newly_detected_tags: 
+                if tid not in newly_detected_tags: # Tag is no longer visible
                     del tag_stability[tid]
-                
+                    
             if locked_target_id is not None and locked_target_id not in newly_detected_tags:
                 # If locked tag disappears, allow system to detect new one next frame
                 locked_target_id = None
@@ -991,13 +991,14 @@ def vision_loop_cam2():
         except Exception as e:
             # [FIXED] Catch exceptions in loop to prevent thread crash
             print(f"[ERROR CAM2 VISION LOOP] {e}")
-            time.sleep(0.1)
+            time.sleep(0.1) # Prevent CPU hogging if a persistent error occurs in one frame
             # Continue the loop
 
     cap.release()
 
 
 def gen_frames_cam1():
+    # [FIXED] Corrected MIME boundary string
     while True:
         try:
             with lock_cam1:
@@ -1008,6 +1009,7 @@ def gen_frames_cam1():
             time.sleep(0.1)
 
 def gen_frames_cam2():
+    # [FIXED] Corrected MIME boundary string
     while True:
         try:
             with lock_cam2:
@@ -1018,6 +1020,24 @@ def gen_frames_cam2():
             time.sleep(0.1)
 
 if __name__ == "__main__":
+    setup_gpio()
+    
+    # Initialize default zones for both cameras with the new standby points
+    default_zones_with_standby = [
+        {"id": 1, "name": "Zone 1", "x": 50, "y": 50, "w": 250, "h": 200, "z": 150.0, "color": "#00ff00", "standby": {"x": 314.40, "y": 141.74, "z": 115.12, "r": 255.29}},
+        {"id": 2, "name": "Zone 2", "x": 580, "y": 150, "w": 200, "h": 200, "z": -37.0, "color": "#ffff00", "standby": {"x": 172.41, "y": 249.71, "z": 124.88, "r": 286.40}},
+        {"id": 3, "name": "Zone 3", "x": 450, "y": 50, "w": 150, "h": 150, "z": 50.0, "color": "#ff0000", "standby": {"x": 5.36, "y": 269.29, "z": 68.41, "r": 324.87}}
+    ]
+    
+    # Save defaults to JSON files if they don't exist, otherwise load current config
+    # Pylance fix: Load/Assign values after 'global' declaration
+    zones_config_cam1 = load_json(ZONE_FILE_CAM1, default_zones_with_standby)
+    zones_config_cam2 = load_json(ZONE_FILE_CAM2, default_zones_with_standby)
+    zone_overrides = load_json(ZONE_OVERRIDES_FILE, {}) # Load overrides here
+    
+    load_affine_matrices(AFFINE_FILE_CAM1, zone_matrices_cam1)
+    load_affine_matrices(AFFINE_FILE_CAM2, zone_matrices_cam2)
+
     t1 = threading.Thread(target=vision_loop_cam1); t1.daemon = True; t1.start()
     t2 = threading.Thread(target=vision_loop_cam2); t2.daemon = True; t2.start()
     print("--- ROBOT SERVER READY (FIXED) ---")
