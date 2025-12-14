@@ -54,11 +54,19 @@ unfilteredTopList.forEach((item: any) => {
       icon: 'mdi:target-variant',
     });
 
-    // 2.4 Smart Control
+    // 2.4 Smart Control (Camera 1)
     finalTopList.push({
       id: 'smart-control',
       subheader: 'Smart Control',
       path: '/smart-control',
+      icon: 'mdi:gesture-tap',
+    });
+
+    // 2.5 Smart Control (Camera 2) - ใหม่!
+    finalTopList.push({
+      id: 'smart-control-cam2',
+      subheader: 'Smart Control Camera 2',
+      path: '/smart-control-camera-2',
       icon: 'mdi:gesture-tap',
     });
 
