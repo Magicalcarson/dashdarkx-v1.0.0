@@ -14,6 +14,7 @@ const AdminPage = lazy(() => import('../pages/admin/AdminPanel'));
 const CalibrationPage = lazy(() => import('../pages/calibration/CalibrationPage'));
 const CalibrationPageCam2 = lazy(() => import('../pages/calibration/CalibrationPageCam2'));
 const SmartControlPage = lazy(() => import('../pages/interactive/InteractivePage'));
+const SmartControlPageCam2 = lazy(() => import('../pages/interactive/InteractivePageCam2'));
 
 // --- Route Guard ---
 const RequireAuth = ({ children }: { children: JSX.Element }) => {
@@ -78,12 +79,22 @@ const router = createBrowserRouter(
               ),
             },
 
-            // ✅ Smart Control
+            // ✅ Smart Control (Camera 1)
             {
               path: 'smart-control',
               element: (
                 <RequireAuth>
                   <SmartControlPage />
+                </RequireAuth>
+              ),
+            },
+
+            // ✅ Smart Control (Camera 2)
+            {
+              path: 'smart-control-camera-2',
+              element: (
+                <RequireAuth>
+                  <SmartControlPageCam2 />
                 </RequireAuth>
               ),
             },
