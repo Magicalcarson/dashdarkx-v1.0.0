@@ -58,7 +58,7 @@ Z_PICK_OFFSET = 62.0  # (ใช้สำหรับ Zone 1 และ 3)
 # ======================================================================================
 RTSP_URL_CAM1 = "rtsp://admin:OokamiMio-2549@192.168.1.124/stream1"
 RTSP_URL_CAM2 = "rtsp://admin:OokamiMio-2549@192.168.1.109/stream1"
-SUCTION_SENSOR_PIN = 33
+SUCTION_SENSOR_PIN = 31
 DB_FILE = "robot_history_log.csv"
 ZONE_FILE_CAM1 = "zones_config_cam1.json"
 ZONE_FILE_CAM2 = "zones_config_cam2.json"
