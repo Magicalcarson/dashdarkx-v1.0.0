@@ -560,7 +560,8 @@ def click_move():
     z_hover = z_pick + 40.0
     sb = get_zone_standby(zone_id)
 
-    print(f"[CLICK] Pixel:({cx:.1f},{cy:.1f}) -> Tag:{tag_id} Zone:{zone_id} Point:{point_id} -> Dobot:({final_rx:.1f},{final_ry:.1f}, Z:{z_pick:.1f})")
+    print(f"[CLICK] Click:({cx:.1f},{cy:.1f}) Tag:({tag_cx:.1f},{tag_cy:.1f}) -> Nearest Point:{point_id} in Zone:{zone_id}")
+    print(f"[CLICK] Robot will go to: ({final_rx:.1f},{final_ry:.1f}, Z:{z_pick:.1f})")
     print(f"[CLICK] Standby: {sb}, z_hover: {z_hover}")
     print(f"[CLICK] Starting execute_pick_sequence thread...")
 
@@ -800,22 +801,18 @@ def vision_loop_cam1():
 
                 if zone:
                     zone_id = int(zone['id'])
-                    
-                    # 1. Calculate Robot Coordinates
-                    if zone_id == 2:
-                        # Zone 2: Use 5-Point Correction
-                        raw_rx, raw_ry = pixel_to_robot_cam1(cx, cy, zone_id)
-                        rx, ry, final_z = calculate_correction_from_5_points(raw_rx, raw_ry)
-                        z_pick = final_z - 2.0
+
+                    # [UPDATED] All zones use 9-point lookup, no need to calculate rx, ry here
+                    # Just mark as processed to add to tag list
+                    if zone_id == 1 or zone_id == 2:
+                        # Zone 1 & 2: Use 9-point lookup (calculation happens in click_move/auto mode)
+                        rx, ry = 0.0, 0.0  # Dummy values, will be calculated by 9-point lookup
+                        z_pick = 0.0  # Dummy value
                         is_processed = True
                     elif zone_id == 3:
-                        # Zone 3: ใช้ Affine ปกติ
-                        rx, ry = pixel_to_robot_cam1(cx, cy, zone_id)
-                        z_base = float(zone.get('z', 0.0))
-                        z_off = get_zone_tag_offset(zone_id, tag.tag_id)
-                        z_pick = z_base + FIXED_OBJECT_HEIGHT + z_off - Z_PICK_OFFSET
-                        is_processed = True
-                    
+                        # Zone 3: Disabled (removed from config)
+                        is_processed = False
+
                     if is_processed:
                         tag_data = {
                             "id": tag.tag_id, "cx": cx, "cy": cy, "rx": rx, "ry": ry, 
