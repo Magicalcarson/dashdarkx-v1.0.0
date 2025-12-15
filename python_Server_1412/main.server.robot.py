@@ -66,6 +66,7 @@ AFFINE_FILE_CAM1 = "affine_params_cam1.json"
 AFFINE_FILE_CAM2 = "affine_params_cam2.json"
 ZONE_OVERRIDES_FILE = "zone_overrides.json"
 AUTO_CAL_FILE = "auto_z_calibration.json"
+NINE_POINTS_FILE = "nine_points_config.json"
 
 # --- Object Data ---
 OBJECT_INFO = {
@@ -182,6 +183,10 @@ default_zones = [
 zones_config_cam1 = load_json(ZONE_FILE_CAM1, default_zones)
 zones_config_cam2 = load_json(ZONE_FILE_CAM2, default_zones)
 zone_overrides = load_json(ZONE_OVERRIDES_FILE, {})
+
+# === [NEW] Load 9-Points Lookup Table ===
+nine_points_data = load_json(NINE_POINTS_FILE, {})
+print(f">>> [INIT] Loaded 9-points data: {list(nine_points_data.keys())}")
 
 zone_matrices_cam1 = {}
 zone_matrices_cam2 = {}
@@ -309,6 +314,51 @@ def hex_to_bgr(hex_color):
 def get_distance(x1, y1, x2, y2):
     return math.sqrt((x1-x2)**2 + (y1-y2)**2)
 
+# === [NEW] 9-Point Lookup System ===
+def find_nearest_nine_point(cx, cy, zone_id):
+    """
+    หาจุดที่ใกล้ที่สุดจาก 9 จุดใน zone ที่กำหนด
+    Returns: (dobot_x, dobot_y, dobot_z, point_id) หรือ None ถ้าไม่เจอ
+    """
+    zone_key = f"zone{zone_id}"
+    if zone_key not in nine_points_data:
+        print(f"[ERROR] Zone {zone_id} not found in nine_points_data")
+        return None
+
+    points = nine_points_data[zone_key]['points']
+    min_dist = float('inf')
+    nearest_point = None
+
+    for point in points:
+        web_x = point['web_x']
+        web_y = point['web_y']
+        dist = get_distance(cx, cy, web_x, web_y)
+
+        if dist < min_dist:
+            min_dist = dist
+            nearest_point = point
+
+    if nearest_point:
+        return (
+            nearest_point['dobot_x'],
+            nearest_point['dobot_y'],
+            nearest_point['dobot_z'],
+            nearest_point['id']
+        )
+
+    return None
+
+def get_zone_standby(zone_id):
+    """
+    คืนค่า standby point ของ zone
+    Returns: {"x": x, "y": y, "z": z}
+    """
+    zone_key = f"zone{zone_id}"
+    if zone_key in nine_points_data:
+        return nine_points_data[zone_key]['standby']
+    # Fallback to default
+    return {"x": 250, "y": 0, "z": 100}
+
 # ======================================================================================
 # 4. ROBOT & LOGIC HELPERS
 # ======================================================================================
@@ -425,7 +475,7 @@ def click_move():
 
     # [FIXED] Search in combined buffers
     all_tags = current_visible_tags_cam1 + current_visible_tags_cam2
-    
+
     for tag in all_tags:
         dist = get_distance(cx, cy, tag['cx'], tag['cy'])
         if dist < min_dist: min_dist = dist; target_tag = tag
@@ -435,21 +485,23 @@ def click_move():
     if not zone_data: return jsonify({"status": "error", "message": "Outside Zone"})
 
     tag_id = int(target_tag['id'])
-    
-    # Use pre-calculated values stored in the tag object by the vision loop
-    final_rx = target_tag['rx']
-    final_ry = target_tag['ry']
-    z_pick = target_tag['z_pick']
-    
-    z_hover = z_pick + 40.0
-    sb = zone_data.get('standby', {"x": 250, "y": 0, "z": 100, "r": 0})
+    zone_id = zone_data['id']
 
-    print(f"[CLICK] Pixel:({cx:.1f},{cy:.1f}) -> Final:({final_rx:.1f},{final_ry:.1f}, Z:{z_pick:.1f})")
-    
+    # === [NEW] Use 9-Point Lookup System ===
+    result = find_nearest_nine_point(cx, cy, zone_id)
+    if not result:
+        return jsonify({"status": "error", "message": "No 9-point data for this zone"})
+
+    final_rx, final_ry, z_pick, point_id = result
+    z_hover = z_pick + 40.0
+    sb = get_zone_standby(zone_id)
+
+    print(f"[CLICK] Pixel:({cx:.1f},{cy:.1f}) -> Tag:{tag_id} Zone:{zone_id} Point:{point_id} -> Dobot:({final_rx:.1f},{final_ry:.1f}, Z:{z_pick:.1f})")
+
     # [FIXED] In MANUAL mode, execute immediately (no delay)
     threading.Thread(target=execute_pick_sequence, args=(final_rx, final_ry, z_pick, z_hover, sb, tag_id, zone_data['name'])).start()
-    
-    return jsonify({"status": "success", "message": "Command Sent"})
+
+    return jsonify({"status": "success", "message": "Command Sent", "point_id": point_id})
 
 # --- Robot APIs (Omitted for brevity) ---
 @app.route('/api/robot/connect', methods=['POST'])
@@ -765,25 +817,33 @@ def vision_loop_cam1():
                 time_elapsed = current_time - tag_stability.get(tag_id, current_time)
 
                 if ROBOT_MODE == 'AUTO' and not is_robot_busy and is_connected:
-                    
+
                     if time_elapsed < AUTO_PICK_DELAY:
-                        status_text = "DETECTED (WAITING)" 
+                        status_text = "DETECTED (WAITING)"
                     else:
                         status_text = "DETECTED (READY)"
                          # Execute pick sequence after delay
                         if current_time - processed_tags.get(tag_id, 0) > 10.0: # Check if already processed recently
                             processed_tags[tag_id] = current_time
-                            
-                            z_pick = target_data['z_pick']
+
                             zone = target_data['zone']
-                            rx = target_data['rx']
-                            ry = target_data['ry']
-                            
-                            z_hover = z_pick + 40.0
-                            sb = zone.get('standby', {"x": 250, "y": 0, "z": 100, "r": 0})
-                            
-                            threading.Thread(target=execute_pick_sequence, 
-                                             args=(rx, ry, z_pick, z_hover, sb, tag_id, zone['name'])).start()
+                            zone_id = int(zone['id'])
+                            cx = target_data['cx']
+                            cy = target_data['cy']
+
+                            # === [NEW] Use 9-Point Lookup System for AUTO mode ===
+                            result = find_nearest_nine_point(cx, cy, zone_id)
+                            if result:
+                                rx, ry, z_pick, point_id = result
+                                z_hover = z_pick + 40.0
+                                sb = get_zone_standby(zone_id)
+
+                                print(f"[AUTO CAM1] Tag:{tag_id} Zone:{zone_id} Point:{point_id} -> Dobot:({rx:.1f},{ry:.1f}, Z:{z_pick:.1f})")
+
+                                threading.Thread(target=execute_pick_sequence,
+                                                 args=(rx, ry, z_pick, z_hover, sb, tag_id, zone['name'])).start()
+                            else:
+                                print(f"[AUTO CAM1 ERROR] No 9-point data for Tag:{tag_id} Zone:{zone_id}")
                 
                 elif not is_robot_busy:
                     status_text = f"DETECTED (MANUAL)" 
@@ -940,7 +1000,7 @@ def vision_loop_cam2():
                     time_elapsed = current_time - tag_stability[tag_id]
 
                     if ROBOT_MODE == 'AUTO' and not is_robot_busy and is_connected:
-                        
+
                         if time_elapsed < AUTO_PICK_DELAY:
                             web_data['status'] = "DETECTED (WAITING)"
                         else:
@@ -948,17 +1008,25 @@ def vision_loop_cam2():
                              # Execute pick sequence after delay
                             if current_time - processed_tags.get(tag_id, 0) > 10.0:
                                 processed_tags[tag_id] = current_time
-                                
-                                z_pick = target_data['z_pick']
+
                                 zone = target_data['zone']
-                                rx = target_data['rx']
-                                ry = target_data['ry']
-                                
-                                z_hover = z_pick + 40.0
-                                sb = zone.get('standby', {"x": 250, "y": 0, "z": 100, "r": 0})
-                                
-                                threading.Thread(target=execute_pick_sequence, 
-                                                 args=(rx, ry, z_pick, z_hover, sb, tag_id, zone['name'])).start()
+                                zone_id = int(zone['id'])
+                                cx = target_data['cx']
+                                cy = target_data['cy']
+
+                                # === [NEW] Use 9-Point Lookup System for AUTO mode ===
+                                result = find_nearest_nine_point(cx, cy, zone_id)
+                                if result:
+                                    rx, ry, z_pick, point_id = result
+                                    z_hover = z_pick + 40.0
+                                    sb = get_zone_standby(zone_id)
+
+                                    print(f"[AUTO CAM2] Tag:{tag_id} Zone:{zone_id} Point:{point_id} -> Dobot:({rx:.1f},{ry:.1f}, Z:{z_pick:.1f})")
+
+                                    threading.Thread(target=execute_pick_sequence,
+                                                     args=(rx, ry, z_pick, z_hover, sb, tag_id, zone['name'])).start()
+                                else:
+                                    print(f"[AUTO CAM2 ERROR] No 9-point data for Tag:{tag_id} Zone:{zone_id}")
                     
                     elif not is_robot_busy:
                         web_data['status'] = f"DETECTED (MANUAL)"
