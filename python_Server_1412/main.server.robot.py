@@ -392,7 +392,7 @@ def control_suction(action):
             client_dash.DO(9, 1); time.sleep(0.5); client_dash.DO(9, 0)
     except: pass
 
-# [UPDATED] Pick Sequence with Retry Until Success
+# [UPDATED] Pick Sequence with Continuous Descent and Suction
 def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
     global is_robot_busy, web_data, sequence_count, total_picked
 
@@ -406,45 +406,68 @@ def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
         set_light('yellow')
         print(f"[ROBOT] Picking ID:{tag_id} Zone:{zone_name} at XYZ: ({rx:.2f}, {ry:.2f}, {z_pick:.2f})")
 
+        # [CRITICAL] Set speed to 50 before all movements
+        client_dash.SpeedFactor(50)
+
         # 1. Go to Standby first
         client_move.MovJ(float(sb['x']), float(sb['y']), float(sb['z']), float(sb['r'])); client_move.Sync()
 
         # 2. Go to Hover position
         client_move.MovJ(rx, ry, z_hover, float(sb['r'])); client_move.Sync()
 
-        # === [NEW] Retry Loop Until Suction Success ===
+        # === [NEW] Continuous Descent with Suction On ===
         retry_count = 0
         while True:
             retry_count += 1
-            print(f"[ROBOT] Attempt #{retry_count} - Trying to pick at ({rx:.2f}, {ry:.2f}, {z_pick:.2f})")
+            print(f"[ROBOT] Attempt #{retry_count} - Descending with suction on")
             web_data['status'] = f"ATTEMPT #{retry_count}"
 
-            # 3. Pick (MovL) - ลงแนวดิ่ง
-            client_move.MovL(rx, ry, z_pick, float(sb['r'])); client_move.Sync()
-
-            # 4. Suction On
+            # 3. Turn on suction BEFORE descending
             control_suction('on')
-            time.sleep(0.8)
+            print("[ROBOT] Suction ON - Starting descent")
 
-            # 5. Check Sensor
+            # 4. Descend slowly while checking suction
+            current_z = z_hover
+            step_size = 3.0  # ลงทีละ 3mm
+
+            while current_z > z_pick:
+                current_z -= step_size
+                if current_z < z_pick:
+                    current_z = z_pick
+
+                client_move.MovL(rx, ry, current_z, float(sb['r']))
+                client_move.Sync()
+
+                # Check if suction successful during descent
+                if check_suction_status():
+                    print(f">>> SUCTION SUCCESS at Z={current_z:.2f} (Attempt #{retry_count})")
+                    web_data['status'] = f"SUCCESS (Attempt #{retry_count})"
+                    break
+
+                time.sleep(0.05)  # Small delay between steps
+
+            # 5. Final check at bottom position
             if check_suction_status():
                 # === SUCCESS! ===
                 print(f">>> SUCTION SUCCESS on attempt #{retry_count}")
-                web_data['status'] = f"SUCCESS (Attempt #{retry_count})"
                 sequence_count += 1; total_picked += 1
                 ts = datetime.datetime.now().strftime("%H:%M:%S")
                 save_to_database(sequence_count, tag_id, ts, zone_name, round(rx, 2), round(ry, 2))
 
-                # Lift up
+                # Lift up from current position
+                web_data['status'] = "LIFTING"
                 client_move.MovL(rx, ry, z_hover, float(sb['r'])); client_move.Sync()
+
                 # Return to Standby
+                web_data['status'] = "RETURNING TO STANDBY"
                 client_move.MovJ(float(sb['x']), float(sb['y']), float(sb['z']), float(sb['r'])); client_move.Sync()
+
                 # Go Home
                 print("[ROBOT] Going to Home position")
                 web_data['status'] = "GOING HOME"
                 client_move.JointMovJ(0.0, 0.0, 0.0, 200.0); client_move.Sync()
 
-                # === [NEW] Go to Drop Point ===
+                # === Go to Drop Point ===
                 print(f"[ROBOT] Going to Drop Point: ({DROP_POINT['x']}, {DROP_POINT['y']}, {DROP_POINT['z']}, {DROP_POINT['r']})")
                 web_data['status'] = "GOING TO DROP POINT"
                 client_move.MovJ(DROP_POINT['x'], DROP_POINT['y'], DROP_POINT['z'], DROP_POINT['r']); client_move.Sync()
@@ -470,9 +493,9 @@ def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
                 print(f">>> SUCTION FAILED on attempt #{retry_count} - Retrying...")
                 web_data['status'] = f"FAILED - RETRY #{retry_count}"
                 control_suction('off')
-                time.sleep(0.3)
+                time.sleep(0.5)
 
-                # Lift up a bit before retry
+                # Lift back to hover position before retry
                 client_move.MovL(rx, ry, z_hover, float(sb['r'])); client_move.Sync()
                 time.sleep(0.5)
 
