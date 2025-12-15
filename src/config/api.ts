@@ -4,7 +4,7 @@
 // เปลี่ยน BASE_URL ตรงนี้เมื่อต้องการเปลี่ยน Server
 // - ถ้าอยู่เครื่องเดียวกัน: "http://localhost:5000"
 // - ถ้าอยู่คนละเครื่อง: "http://192.168.1.50:5000"
-export const BASE_URL = "http://localhost:5000";
+export const BASE_URL = "http://192.168.1.50:5000";
 
 // API Endpoints
 export const API_ENDPOINTS = {
