@@ -521,10 +521,15 @@ def click_move():
 
     tag_id = int(target_tag['id'])
     zone_id = int(zone_data['id'])
+
+    # [FIXED] Use Tag position, not click position!
+    tag_cx = target_tag['cx']
+    tag_cy = target_tag['cy']
     print(f"[CLICK DEBUG] Tag ID: {tag_id}, Zone ID: {zone_id}, Zone Name: {zone_data['name']}")
+    print(f"[CLICK DEBUG] Tag position: ({tag_cx}, {tag_cy})")
 
     # === [NEW] Use 9-Point Lookup System ===
-    result = find_nearest_nine_point(cx, cy, zone_id)
+    result = find_nearest_nine_point(tag_cx, tag_cy, zone_id)
     if not result:
         print(f"[CLICK ERROR] No 9-point data for zone {zone_id}")
         return jsonify({"status": "error", "message": "No 9-point data for this zone"})
