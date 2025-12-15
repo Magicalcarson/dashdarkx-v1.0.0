@@ -18,7 +18,7 @@ from dobot_api import DobotApiDashboard, DobotApi, DobotApiMove
 # -------------------------------------------------------------------------
 # [HARDWARE SETUP] GPIO for Jetson Nano / Orin Nano
 # -------------------------------------------------------------------------
-HAS_GPIO = False
+HAS_GPIO = True
 try:
     import Jetson.GPIO as GPIO
     HAS_GPIO = True
