@@ -50,8 +50,11 @@ ZONE2_CALIBRATION_POINTS = [
 ]
 
 # --- Picking Settings ---
-FIXED_OBJECT_HEIGHT = 20.0 
+FIXED_OBJECT_HEIGHT = 20.0
 Z_PICK_OFFSET = 62.0  # (ใช้สำหรับ Zone 1 และ 3)
+
+# --- Drop Point (จุดปล่อยวัตถุ) ---
+DROP_POINT = {"x": 317.37, "y": -198.35, "z": 103.11, "r": 196.95}
 
 # ======================================================================================
 # GLOBAL SETTINGS
@@ -437,9 +440,28 @@ def execute_pick_sequence(rx, ry, z_pick, z_hover, sb, tag_id, zone_name):
                 # Return to Standby
                 client_move.MovJ(float(sb['x']), float(sb['y']), float(sb['z']), float(sb['r'])); client_move.Sync()
                 # Go Home
+                print("[ROBOT] Going to Home position")
+                web_data['status'] = "GOING HOME"
+                client_move.JointMovJ(0.0, 0.0, 0.0, 200.0); client_move.Sync()
+
+                # === [NEW] Go to Drop Point ===
+                print(f"[ROBOT] Going to Drop Point: ({DROP_POINT['x']}, {DROP_POINT['y']}, {DROP_POINT['z']}, {DROP_POINT['r']})")
+                web_data['status'] = "GOING TO DROP POINT"
+                client_move.MovJ(DROP_POINT['x'], DROP_POINT['y'], DROP_POINT['z'], DROP_POINT['r']); client_move.Sync()
+
+                # Release object
+                print("[ROBOT] Releasing object at Drop Point")
+                web_data['status'] = "RELEASING"
+                control_suction('off')
+                time.sleep(1.0)  # Wait for object to drop
+
+                # Return Home
+                print("[ROBOT] Returning to Home")
+                web_data['status'] = "RETURNING HOME"
                 client_move.JointMovJ(0.0, 0.0, 0.0, 200.0); client_move.Sync()
 
                 set_light('green')
+                web_data['status'] = "IDLE"
                 is_robot_busy = False
                 return True
 
