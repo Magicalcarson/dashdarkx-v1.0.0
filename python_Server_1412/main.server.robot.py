@@ -320,12 +320,16 @@ def find_nearest_nine_point(cx, cy, zone_id):
     หาจุดที่ใกล้ที่สุดจาก 9 จุดใน zone ที่กำหนด
     Returns: (dobot_x, dobot_y, dobot_z, point_id) หรือ None ถ้าไม่เจอ
     """
+    print(f"[9-POINT DEBUG] Looking for nearest point: cx={cx}, cy={cy}, zone_id={zone_id}")
     zone_key = f"zone{zone_id}"
     if zone_key not in nine_points_data:
-        print(f"[ERROR] Zone {zone_id} not found in nine_points_data")
+        print(f"[9-POINT ERROR] Zone {zone_id} not found in nine_points_data")
+        print(f"[9-POINT ERROR] Available zones: {list(nine_points_data.keys())}")
         return None
 
     points = nine_points_data[zone_key]['points']
+    print(f"[9-POINT DEBUG] Zone {zone_id} has {len(points)} points")
+
     min_dist = float('inf')
     nearest_point = None
 
@@ -333,12 +337,15 @@ def find_nearest_nine_point(cx, cy, zone_id):
         web_x = point['web_x']
         web_y = point['web_y']
         dist = get_distance(cx, cy, web_x, web_y)
+        print(f"[9-POINT DEBUG] Point {point['id']}: web({web_x}, {web_y}) distance={dist:.2f}")
 
         if dist < min_dist:
             min_dist = dist
             nearest_point = point
 
     if nearest_point:
+        print(f"[9-POINT SUCCESS] Nearest point: ID={nearest_point['id']}, distance={min_dist:.2f}")
+        print(f"[9-POINT SUCCESS] Dobot coords: ({nearest_point['dobot_x']}, {nearest_point['dobot_y']}, {nearest_point['dobot_z']})")
         return (
             nearest_point['dobot_x'],
             nearest_point['dobot_y'],
@@ -346,6 +353,7 @@ def find_nearest_nine_point(cx, cy, zone_id):
             nearest_point['id']
         )
 
+    print(f"[9-POINT ERROR] No nearest point found!")
     return None
 
 def get_zone_standby(zone_id):
@@ -467,29 +475,45 @@ def set_robot_mode():
 @app.route('/api/robot/click_move', methods=['POST'])
 def click_move():
     global is_connected
-    if not is_connected: return jsonify({"status": "error", "message": "Not Connected"})
-    if ROBOT_MODE == 'AUTO': return jsonify({"status": "error", "message": "Cannot click in AUTO mode"})
+    if not is_connected:
+        print("[CLICK ERROR] Robot not connected")
+        return jsonify({"status": "error", "message": "Not Connected"})
+    if ROBOT_MODE == 'AUTO':
+        print("[CLICK ERROR] Cannot click in AUTO mode")
+        return jsonify({"status": "error", "message": "Cannot click in AUTO mode"})
 
     cx, cy = request.json.get('x'), request.json.get('y')
+    print(f"[CLICK DEBUG] Received click at: ({cx}, {cy})")
+
     target_tag = None; min_dist = 50.0
 
     # [FIXED] Search in combined buffers
     all_tags = current_visible_tags_cam1 + current_visible_tags_cam2
+    print(f"[CLICK DEBUG] Total tags visible: {len(all_tags)}")
 
     for tag in all_tags:
         dist = get_distance(cx, cy, tag['cx'], tag['cy'])
         if dist < min_dist: min_dist = dist; target_tag = tag
 
-    if not target_tag: return jsonify({"status": "error", "message": "No Tag"})
+    if not target_tag:
+        print("[CLICK ERROR] No tag found near click position")
+        return jsonify({"status": "error", "message": "No Tag"})
+
+    print(f"[CLICK DEBUG] Found target tag: ID={target_tag['id']}, cx={target_tag['cx']}, cy={target_tag['cy']}")
+
     zone_data = target_tag['zone']
-    if not zone_data: return jsonify({"status": "error", "message": "Outside Zone"})
+    if not zone_data:
+        print("[CLICK ERROR] Tag outside zone")
+        return jsonify({"status": "error", "message": "Outside Zone"})
 
     tag_id = int(target_tag['id'])
-    zone_id = zone_data['id']
+    zone_id = int(zone_data['id'])
+    print(f"[CLICK DEBUG] Tag ID: {tag_id}, Zone ID: {zone_id}, Zone Name: {zone_data['name']}")
 
     # === [NEW] Use 9-Point Lookup System ===
     result = find_nearest_nine_point(cx, cy, zone_id)
     if not result:
+        print(f"[CLICK ERROR] No 9-point data for zone {zone_id}")
         return jsonify({"status": "error", "message": "No 9-point data for this zone"})
 
     final_rx, final_ry, z_pick, point_id = result
@@ -497,6 +521,8 @@ def click_move():
     sb = get_zone_standby(zone_id)
 
     print(f"[CLICK] Pixel:({cx:.1f},{cy:.1f}) -> Tag:{tag_id} Zone:{zone_id} Point:{point_id} -> Dobot:({final_rx:.1f},{final_ry:.1f}, Z:{z_pick:.1f})")
+    print(f"[CLICK] Standby: {sb}, z_hover: {z_hover}")
+    print(f"[CLICK] Starting execute_pick_sequence thread...")
 
     # [FIXED] In MANUAL mode, execute immediately (no delay)
     threading.Thread(target=execute_pick_sequence, args=(final_rx, final_ry, z_pick, z_hover, sb, tag_id, zone_data['name'])).start()
