@@ -500,9 +500,9 @@ def click_move():
 
     target_tag = None; min_dist = 50.0
 
-    # [FIXED] Search in combined buffers
-    all_tags = current_visible_tags_cam1 + current_visible_tags_cam2
-    print(f"[CLICK DEBUG] Total tags visible: {len(all_tags)}")
+    # [UPDATED] Use Cam1 only (Cam2 disabled for tag detection)
+    all_tags = current_visible_tags_cam1
+    print(f"[CLICK DEBUG] Total tags visible (Cam1 only): {len(all_tags)}")
 
     for tag in all_tags:
         dist = get_distance(cx, cy, tag['cx'], tag['cy'])
@@ -933,178 +933,38 @@ def vision_loop_cam1():
     cap.release()
 
 def vision_loop_cam2():
-    """ CAM 2: รับผิดชอบ Zone 1 (ใช้ Affine) """
-    global output_frame_cam2, current_visible_tags_cam2, locked_target_id_cam2
-    global processed_tags, tag_stability
-    
+    """ CAM 2: Live Feed Only (No Tag Detection) """
+    global output_frame_cam2, current_visible_tags_cam2
+
     cap = cv2.VideoCapture(RTSP_URL_CAM2)
-    at_detector = Detector(families="tag36h11")
-    print(">>> CAM2: STARTED (Side View) <<<")
+    print(">>> CAM2: STARTED (Live Feed Only - No Tag Detection) <<<")
     
     while True:
         try:
             ret, frame = cap.read()
-            if not ret: time.sleep(2); cap = cv2.VideoCapture(RTSP_URL_CAM2); continue
-            
-            current_visible_tags_cam2 = []
-            current_time = time.time()
-            
-            newly_detected_tags = {}
-            closest_tag_id = None
-            min_dist_to_center = float('inf')
-            visible_ids = set()
+            if not ret:
+                time.sleep(2)
+                cap = cv2.VideoCapture(RTSP_URL_CAM2)
+                continue
 
-            # Draw Zones 
+            # [DISABLED] No tag detection for Cam2 - only show zones
+            current_visible_tags_cam2 = []
+
+            # Draw Zones only (for reference)
             for z in zones_config_cam2:
-                color = hex_to_bgr(z['color']) 
+                color = hex_to_bgr(z['color'])
                 cv2.rectangle(frame, (z['x'], z['y']), (z['x']+z['w'], z['y']+z['h']), color, 2)
                 cv2.putText(frame, z['name'], (z['x'], z['y']-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-            if CAM2_ENABLED:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY); tags = at_detector.detect(gray)
-                
-                for tag in tags:
-                    cx, cy = int(tag.center[0]), int(tag.center[1]); zone = check_zone_cam2(cx, cy); visible_ids.add(tag.tag_id)
-                    
-                    rx, ry, z_pick = 0.0, 0.0, 0.0
-                    is_processed = False
+            # Display "Live Feed Only" text
+            cv2.putText(frame, "CAM 2 - LIVE FEED ONLY", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
 
-                    if zone:
-                        zone_id = int(zone['id'])
-                        
-                        # 1. Calculate Robot Coordinates
-                        if zone_id == 1:
-                            # Zone 1 (กลางภาพ Cam 2) -> ใช้ Affine ปกติ
-                            rx, ry = pixel_to_robot_cam2(cx, cy, zone_id)
-                            z_base = float(zone.get('z', 0.0))
-                            z_off = get_zone_tag_offset(zone_id, tag.tag_id)
-                            z_pick = z_base + FIXED_OBJECT_HEIGHT + z_off - Z_PICK_OFFSET
-                            is_processed = True
-                        
-                        if is_processed:
-                            tag_data = {
-                                "id": tag.tag_id, "cx": cx, "cy": cy, "rx": rx, "ry": ry, 
-                                "z_pick": z_pick, "zone": zone, "cam": 2
-                            }
-                            newly_detected_tags[tag.tag_id] = tag_data
+            with lock_cam2:
+                output_frame_cam2 = frame.copy()
 
-                            # Track closest tag for potential new lock
-                            dist = get_distance(cx, cy, frame.shape[1]/2, frame.shape[0]/2)
-                            if dist < min_dist_to_center:
-                                min_dist_to_center = dist
-                                closest_tag_id = tag.tag_id
-                                
-                            # --- Drawing Logic with Stability ---
-                            if tag.tag_id not in tag_stability:
-                                tag_stability[tag.tag_id] = current_time
-                            
-                            time_elapsed = current_time - tag_stability[tag.tag_id]
-                            remaining_delay = max(0.0, AUTO_PICK_DELAY - time_elapsed)
-
-                            if remaining_delay > 0:
-                                # State: WAITING (Yellow frame, countdown text)
-                                color = hex_to_bgr("#ffff00") # Yellow
-                                cv2.polylines(frame, [tag.corners.astype(int)], True, color, 2)
-                                cv2.putText(frame, f"WAIT {remaining_delay:.1f}s", (cx - 10, cy + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                            else:
-                                # State: READY (Green frame)
-                                color = hex_to_bgr("#00ff00") # Green
-                                cv2.polylines(frame, [tag.corners.astype(int)], True, color, 2)
-                                cv2.putText(frame, "READY", (cx - 10, cy + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                        
-                        # Draw Zone 2, 3 detected by Cam 2 as low priority 
-                        elif zone_id == 2 or zone_id == 3:
-                            cv2.polylines(frame, [tag.corners.astype(int)], True, hex_to_bgr(zone['color']), 2)
-                    
-            
-            # --- Target Locking Logic ---
-            target_data = None
-            
-            if locked_target_id is None: # Only process if Cam1 hasn't locked onto a target yet
-                
-                if locked_target_id_cam2 in newly_detected_tags:
-                    target_data = newly_detected_tags[locked_target_id_cam2]
-                
-                else:
-                    locked_target_id_cam2 = None
-                    if closest_tag_id is not None:
-                        locked_target_id_cam2 = closest_tag_id
-                        target_data = newly_detected_tags[closest_tag_id]
-                
-                if target_data and not is_robot_busy:
-                    tag_id = target_data['id']
-                    # Update web_data with the stable target position
-                    web_data['target_x'] = round(target_data['rx'], 2)
-                    web_data['target_y'] = round(target_data['ry'], 2)
-
-                    # 2. Delay Logic (5 seconds)
-                    if tag_id not in tag_stability:
-                        tag_stability[tag_id] = current_time # First seen time
-                    
-                    time_elapsed = current_time - tag_stability[tag_id]
-
-                    if ROBOT_MODE == 'AUTO' and not is_robot_busy and is_connected:
-
-                        if time_elapsed < AUTO_PICK_DELAY:
-                            web_data['status'] = "DETECTED (WAITING)"
-                        else:
-                            web_data['status'] = "DETECTED (READY)"
-                             # Execute pick sequence after delay
-                            if current_time - processed_tags.get(tag_id, 0) > 10.0:
-                                processed_tags[tag_id] = current_time
-
-                                zone = target_data['zone']
-                                zone_id = int(zone['id'])
-                                cx = target_data['cx']
-                                cy = target_data['cy']
-
-                                # === [NEW] Use 9-Point Lookup System for AUTO mode ===
-                                result = find_nearest_nine_point(cx, cy, zone_id)
-                                if result:
-                                    rx, ry, z_pick, point_id = result
-                                    z_hover = z_pick + 40.0
-                                    sb = get_zone_standby(zone_id)
-
-                                    print(f"[AUTO CAM2] Tag:{tag_id} Zone:{zone_id} Point:{point_id} -> Dobot:({rx:.1f},{ry:.1f}, Z:{z_pick:.1f})")
-
-                                    threading.Thread(target=execute_pick_sequence,
-                                                     args=(rx, ry, z_pick, z_hover, sb, tag_id, zone['name'])).start()
-                                else:
-                                    print(f"[AUTO CAM2 ERROR] No 9-point data for Tag:{tag_id} Zone:{zone_id}")
-                    
-                    elif not is_robot_busy:
-                        web_data['status'] = f"DETECTED (MANUAL)"
-                        
-                # Cleanup stability dictionary
-                for tid in list(tag_stability.keys()):
-                    if tid not in visible_ids: 
-                        del tag_stability[tid]
-                
-                if locked_target_id_cam2 is not None and locked_target_id_cam2 not in visible_ids:
-                    locked_target_id_cam2 = None
-
-            elif locked_target_id is not None:
-                 # If Cam1 has locked the target, Cam2 should not interfere with target position
-                 pass
-            else:
-                # If no target is locked by either camera and not busy
-                if not is_robot_busy:
-                    web_data['status'] = "IDLE"
-                    web_data['target_x'] = 0.0
-                    web_data['target_y'] = 0.0
-                
-            
-            # Update current_visible_tags_cam2 (used for /data API)
-            current_visible_tags_cam2 = list(newly_detected_tags.values())
-
-
-            with lock_cam2: output_frame_cam2 = frame.copy()
-            
         except Exception as e:
-            # [FIXED] Catch exceptions in loop to prevent thread crash
             print(f"[ERROR CAM2 VISION LOOP] {e}")
             time.sleep(0.1)
-            # Continue the loop
 
     cap.release()
 
